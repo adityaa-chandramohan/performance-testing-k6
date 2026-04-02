@@ -1,0 +1,36 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: 'local'
+
+# ── Scrape targets ────────────────────────────────────────────────────────────
+# k6 metrics arrive via remote-write (no scrape job needed for k6 itself).
+# Prometheus scrapes: itself, the API /metrics, and cAdvisor.
+# ─────────────────────────────────────────────────────────────────────────────
+
+scrape_configs:
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Express API — prom-client default + custom request metrics
+  - job_name: api
+    static_configs:
+      - targets: ['api:3000']
+    metrics_path: /metrics
+
+  # cAdvisor — container CPU, memory, network, disk I/O
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+    metric_relabel_configs:
+      # Keep only the api container metrics to reduce cardinality
+      - source_labels: [container_label_com_docker_compose_service]
+        regex: api
+        action: keep
+      # Also keep metrics with no container label (host-level)
+      - source_labels: [container_label_com_docker_compose_service]
+        regex: ''
+        action: keep

@@ -1,0 +1,4 @@
+node_modules
+npm-debug.log
+k6/report.html
+.git

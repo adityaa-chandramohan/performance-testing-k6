@@ -2,6 +2,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend } from 'k6/metrics';
 import { htmlReport } from 'https://raw.githubusercontent.com/benc-uk/k6-reporter/main/dist/bundle.js';
+import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.1/index.js';
 
 // ─── Custom metrics ─────────────────────────────────────────────────────────
 
@@ -26,9 +27,12 @@ export const options = {
     http_req_duration: ['p(95)<500'],
     // Error rate must stay below 5%
     error_rate:        ['rate<0.05'],
-    // Slow endpoint p99 under 600ms
+    // Slow endpoint rate under 10%
     slow_request_rate: ['rate<0.10'],
   },
+
+  // Tag all metrics with the test name — visible in Prometheus / Grafana
+  tags: { testid: 'users-api-load' },
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -49,7 +53,7 @@ export default function () {
 
   // 1. Health check
   {
-    const res = http.get(`${BASE_URL}/health`);
+    const res = http.get(`${BASE_URL}/health`, { tags: { endpoint: 'health' } });
     check(res, { 'health: status 200': r => r.status === 200 });
     errorRate.add(res.status !== 200);
   }
@@ -58,7 +62,7 @@ export default function () {
 
   // 2. List all users
   {
-    const res = http.get(`${BASE_URL}/api/users`);
+    const res = http.get(`${BASE_URL}/api/users`, { tags: { endpoint: 'list_users' } });
     const ok  = check(res, {
       'list users: status 200':        r => r.status === 200,
       'list users: has users array':   r => JSON.parse(r.body).users !== undefined,
@@ -70,7 +74,7 @@ export default function () {
 
   // 3. Get single user
   {
-    const res = http.get(`${BASE_URL}/api/users/${userId}`);
+    const res = http.get(`${BASE_URL}/api/users/${userId}`, { tags: { endpoint: 'get_user' } });
     check(res, {
       'get user: status 200 or 404': r => r.status === 200 || r.status === 404,
     });
@@ -87,7 +91,10 @@ export default function () {
       role:  'user',
     });
     const start = Date.now();
-    const res   = http.post(`${BASE_URL}/api/users`, payload, { headers: JSON_HEADERS });
+    const res   = http.post(`${BASE_URL}/api/users`, payload, {
+      headers: JSON_HEADERS,
+      tags: { endpoint: 'create_user' },
+    });
     createTrend.add(Date.now() - start);
     check(res, { 'create user: status 201': r => r.status === 201 });
     errorRate.add(res.status !== 201);
@@ -97,7 +104,7 @@ export default function () {
 
   // 5. Slow endpoint (every 5th VU iteration to add latency variety)
   if (__ITER % 5 === 0) {
-    const res = http.get(`${BASE_URL}/api/slow`);
+    const res = http.get(`${BASE_URL}/api/slow`, { tags: { endpoint: 'slow' } });
     check(res, { 'slow: status 200': r => r.status === 200 });
     slowReqRate.add(res.timings.duration > 400);
     errorRate.add(res.status !== 200);
@@ -106,10 +113,13 @@ export default function () {
   sleep(0.5);
 }
 
-// ─── HTML report ─────────────────────────────────────────────────────────────
+// ─── Summary output ───────────────────────────────────────────────────────────
+// HTML report + stdout summary; Prometheus metrics are pushed live via
+// --out=experimental-prometheus-rw when running inside Docker.
 
 export function handleSummary(data) {
   return {
     'k6/report.html': htmlReport(data),
+    stdout: textSummary(data, { indent: ' ', enableColors: true }),
   };
 }
